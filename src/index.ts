@@ -3,7 +3,7 @@ import { ingestData, IngestDataRequest, IIngestDataRequest } from "./ingest-data
 
 export interface Env {
   // Queue binding
-  AKTO_TRAFFIC_QUEUE_NGINX?: Queue;
+  AKTO_TRAFFIC_QUEUE_EVENUP?: Queue;
 }
 
 const app = new Hono<{ Bindings: Env }>();
