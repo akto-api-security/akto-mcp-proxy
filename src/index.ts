@@ -1,5 +1,6 @@
 import { Hono } from "hono";
-import { ingestData, IngestDataRequest, IIngestDataRequest } from "./ingest-data";
+import { ingestDataDeprecated, IngestDataRequestDeprecated, IIngestDataRequestDeprecated } from "./ingest-data-deprecated";
+import { ingestData, IngestDataRequest } from "./ingest-data";
 
 export interface Env {
   // Queue binding
@@ -13,10 +14,51 @@ app.get("/health", (c) => {
   return c.text("OK");
 });
 
-// Traffic ingestion endpoint
+// New traffic ingestion endpoint (v2)
+app.post("/api/ingestData", async (c) => {
+  try {
+    const requestBody = await c.req.json<IngestDataRequest>();
+
+    // Validate request body
+    if (!requestBody.batchData || !Array.isArray(requestBody.batchData)) {
+      return c.json(
+        { error: "batchData is required and must be an array" },
+        400
+      );
+    }
+
+    if (requestBody.batchData.length === 0) {
+      return c.json(
+        { error: "batchData must contain at least one item" },
+        400
+      );
+    }
+
+    const result = ingestData(requestBody, c.env, c.executionCtx);
+
+    if (!result.success) {
+      return c.json({ error: result.message }, 400);
+    }
+
+    return c.json({
+      message: result.message,
+      processed: result.processed,
+    });
+  } catch (error) {
+    console.error("Error processing ingestData request:", error);
+
+    if (error instanceof SyntaxError) {
+      return c.json({ error: "Invalid JSON in request body" }, 400);
+    }
+
+    return c.json({ error: "Internal server error while processing request" }, 500);
+  }
+});
+
+// Traffic ingestion endpoint (deprecated - use /api/ingestData instead)
 app.post("/ingest-data", async (c) => {
   try {
-    const requestBody = await c.req.json<IIngestDataRequest>();
+    const requestBody = await c.req.json<IIngestDataRequestDeprecated>();
 
     // Validate required fields
     if (!requestBody.host || !requestBody.url || !requestBody.method) {
@@ -42,7 +84,7 @@ app.post("/ingest-data", async (c) => {
       requestBody.requestHeaders.host = requestBody.host;
     }
 
-    const ingestDataRequest = new IngestDataRequest(
+    const ingestDataRequest = new IngestDataRequestDeprecated(
       requestBody.host,
       requestBody.url,
       requestBody.method,
@@ -56,7 +98,7 @@ app.post("/ingest-data", async (c) => {
       requestBody.tag
     );
 
-    const result = ingestData(ingestDataRequest, c.env, c.executionCtx);
+    const result = ingestDataDeprecated(ingestDataRequest, c.env, c.executionCtx);
 
     if (!result.success) {
       return c.json({ error: result.message }, 500);
@@ -82,7 +124,7 @@ app.notFound((c) => {
   return c.json(
     {
       error: "Not Found",
-      message: "This worker only handles /health and /ingest-data endpoints",
+      message: "This worker handles /health, /api/ingestData, and /ingest-data (deprecated) endpoints",
     },
     404
   );
