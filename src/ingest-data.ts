@@ -1,69 +1,36 @@
-export interface IIngestDataRequest {
-  host: string;
-  url: string;
+export interface IngestDataBatch {
+  path: string;
+  requestHeaders: string;
+  responseHeaders: string;
   method: string;
-  requestHeaders: Record<string, string>;
-  requestBody: string;
-  responseHeaders: Record<string, string>;
-  responseStatus: number;
-  responseStatusText: string;
-  responseBody: string;
-  time?: number;
-  tag?: Record<string, string>;
+  requestPayload: string;
+  responsePayload: string;
+  ip: string;
+  destIp?: string;
+  time: string;
+  statusCode: string;
+  type: string;
+  status: string;
+  akto_account_id: string;
+  akto_vxlan_id: string;
+  is_pending: string;
+  source: string;
+  direction?: string;
+  process_id?: string;
+  socket_id?: string;
+  daemonset_id?: string;
+  enabled_graph?: string;
+  tag?: string;
 }
 
-export class IngestDataRequest implements IIngestDataRequest {
-  host: string;
-  url: string;
-  method: string;
-  requestHeaders: Record<string, string>;
-  requestBody: string;
-  responseHeaders: Record<string, string>;
-  responseStatus: number;
-  responseStatusText: string;
-  responseBody: string;
-  time?: number;
-  tag?: Record<string, string>;
-
-  constructor(
-    host: string,
-    url: string,
-    method: string,
-    requestHeaders: Record<string, string>,
-    requestBody: string,
-    responseHeaders: Record<string, string>,
-    responseStatus: number,
-    responseStatusText: string,
-    responseBody: string,
-    time?: number,
-    tag?: Record<string, string>
-  ) {
-    this.host = host;
-    this.url = url;
-    this.method = method;
-    this.requestHeaders = requestHeaders;
-    this.requestBody = requestBody;
-    this.responseHeaders = responseHeaders;
-    this.responseStatus = responseStatus;
-    this.responseStatusText = responseStatusText;
-    this.responseBody = responseBody;
-    this.time = time;
-    this.tag = tag;
-  }
+export interface IngestDataRequest {
+  batchData: IngestDataBatch[];
 }
 
 export interface IngestDataResult {
   success: boolean;
   message: string;
-  captured: boolean;
-}
-
-function normalizeHeaders(headers: Record<string, string>): Record<string, string> {
-  const normalized: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    normalized[key.toLowerCase()] = value;
-  }
-  return normalized;
+  processed: number;
 }
 
 export function ingestData(
@@ -72,25 +39,28 @@ export function ingestData(
   ctx: ExecutionContext
 ): IngestDataResult {
   try {
-    // Normalize headers once for efficient lookups
-    const normalizedRequestHeaders = normalizeHeaders(ingestDataRequest.requestHeaders);
-
-    const contentType = (normalizedRequestHeaders["content-type"] || "").toLowerCase();
-    const isAllowed = isAllowedContentType(contentType);
-    const shouldCapture = isAllowed && isValidStatus(ingestDataRequest.responseStatus);
-
-    if (!shouldCapture) {
+    if (!ingestDataRequest.batchData || ingestDataRequest.batchData.length === 0) {
       return {
-        success: true,
-        message: `Traffic not captured. ContentType allowed: ${isAllowed}, Status valid: ${isValidStatus(ingestDataRequest.responseStatus)}`,
-        captured: false
+        success: false,
+        message: "batchData is required and must not be empty",
+        processed: 0
       };
+    }
+
+    // Validate each batch item
+    for (const batch of ingestDataRequest.batchData) {
+      if (!batch.path || !batch.method || !batch.time) {
+        return {
+          success: false,
+          message: "Missing required fields in batchData: path, method, and time are mandatory",
+          processed: 0
+        };
+      }
     }
 
     ctx.waitUntil((async () => {
       try {
-        const logs = generateLogFromPayload(ingestDataRequest);
-        await sendToQueue(logs, env);
+        await sendToQueue(ingestDataRequest.batchData, env);
       } catch (error) {
         console.error("Error processing traffic in background:", error);
       }
@@ -99,76 +69,23 @@ export function ingestData(
     return {
       success: true,
       message: "Traffic successfully queued for processing",
-      captured: true
+      processed: ingestDataRequest.batchData.length
     };
   } catch (error) {
     console.error("Error ingesting data:", error);
     return {
       success: false,
       message: `Error ingesting data: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      captured: false
+      processed: 0
     };
   }
 }
 
-function isAllowedContentType(contentType: string): boolean {
-  const allowedTypes = [
-    "application/json",
-    "application/xml",
-    "text/xml",
-    "application/grpc",
-    "application/x-www-form-urlencoded",
-    "application/soap+xml"
-  ];
-  return allowedTypes.some(type => contentType.includes(type));
-}
-
-function isValidStatus(status: number): boolean {
-  return (status >= 200 && status < 300) || [301, 302, 304].includes(status);
-}
-
-function generateLogFromPayload(payload: IngestDataRequest): string {
-  const url = new URL(payload.url);
-  const timestamp = payload.time ? Math.round(payload.time / 1000) : Math.round(Date.now() / 1000);
-
-  // Normalize request headers once for efficient lookups
-  const normalizedRequestHeaders = normalizeHeaders(payload.requestHeaders);
-
-  // Merge service tag with additional tags from payload
-  const mergedTags = {
-    service: "cloudflare",
-    ...(payload.tag || {})
-  };
-
-  const value = {
-    path: url.pathname,
-    requestHeaders: JSON.stringify(payload.requestHeaders),
-    responseHeaders: JSON.stringify(payload.responseHeaders),
-    method: payload.method,
-    requestPayload: payload.requestBody,
-    responsePayload: payload.responseBody,
-    ip: normalizedRequestHeaders["x-forwarded-for"] ||
-        normalizedRequestHeaders["cf-connecting-ip"] ||
-        normalizedRequestHeaders["x-real-ip"] || "",
-    time: timestamp.toString(),
-    statusCode: payload.responseStatus.toString(),
-    type: "HTTP/1.1",
-    status: payload.responseStatusText,
-    akto_account_id: "1000000",
-    akto_vxlan_id: "0",
-    is_pending: "false",
-    source: "MIRRORING",
-    tag: JSON.stringify(mergedTags)
-  };
-  return JSON.stringify({ batchData: [value] });
-}
-
-async function sendToQueue(logs: string, env: any): Promise<void> {
+async function sendToQueue(batchData: IngestDataBatch[], env: any): Promise<void> {
   try {
-    const data = JSON.parse(logs);
-    if (!data.batchData || data.batchData.length === 0) return;
+    if (!batchData || batchData.length === 0) return;
 
-    const messages = data.batchData.map((item: any) => ({
+    const messages = batchData.map((item: IngestDataBatch) => ({
       body: JSON.stringify(item),
     }));
 
