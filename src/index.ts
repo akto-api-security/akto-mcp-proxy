@@ -4,7 +4,7 @@ import { ingestData, IngestDataRequest } from "./ingest-data";
 
 export interface Env {
   // Queue binding
-  AKTO_TRAFFIC_QUEUE_MORGAN_STANLEY?: Queue;
+  AKTO_TRAFFIC_QUEUE_DELL_DEMO?: Queue;
 }
 
 const app = new Hono<{ Bindings: Env }>();
